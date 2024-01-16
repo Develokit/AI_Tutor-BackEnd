@@ -100,13 +100,11 @@ public class RealController {
         TutoringPageDto res = realService.findByIdInTutoringPage(assistantId);
         return ResponseEntity.ok(res);
     }
-
     //스레드 생성하기
     @PostMapping("/assistants/threads")
     public ResponseEntity<Object> createThread(){
         return ResponseEntity.ok(assistantService.createThreads().getBody());
     }
-
     //메시지 보내고 답변 받기 - 파일(사진 등)으로도 질문하는 경우로 수정
     @PostMapping("/assistants/{threadId}/chat")
     public ResponseEntity<Object> getMessage(@PathVariable("threadId") String threadId, @ModelAttribute getMessageDto getMessageDto
@@ -155,12 +153,11 @@ public class RealController {
             cnt++;
         }
         //음성으로 질문한 거라면
-        System.out.println("getMessageDto.getIsVoice() = " + getMessageDto.getIsVoice());
         if(getMessageDto.getIsVoice().equals("true")){
             //byte[] speech = assistantService.createSpeech2(new AudioRequestDto(chatDto.getAnswer()));
             System.out.println("음성 인터페이스 전환");
             String voice = realService.getAssistantVoice(getMessageDto.getAssistantId());
-            ResponseEntity<Object> speech = assistantService.createSpeech(new AudioRequestDto(chatDto.getAnswer(), voice));
+            ResponseEntity<Object> speech = assistantService.createSpeech(new AudioRequestDto(chatDto.getAnswer()), voice);
             TutorMessageDto res = new TutorMessageDto(chatDto, speech);
             return ResponseEntity.ok(res);
         }
@@ -205,8 +202,6 @@ public class RealController {
 
         Assistant findOne = realService.findById(assistantId);
         String setInstruction = "";
-        System.out.println("modifyRequestDto.toString() = " + modifyRequestDto.toString());
-        System.out.println("modifyRequestDto.getFile2() = " + modifyRequestDto.getFile2());
 
         //튜터 성향에 관한 수정 사항 검증
         Personality personality = findOne.getPersonality();
@@ -214,12 +209,10 @@ public class RealController {
 
         //instruction 변경 검증
         if(!modifyRequestDto.getInstruction().equals(findOne.getInstruction())){
-            System.out.println("instruction 변경");
             realService.modifyAssistantInstruction(modifyRequestDto.getInstruction(), assistantId);
 
             //personality, speechLevel 둘 다 수정된 경우
             if(personality != null && speechLevel != null && !personality.equals(modifyRequestDto.getPersonality()) && !speechLevel.equals(modifyRequestDto.getSpeechLevel())){
-                System.out.println("첫 번째 조건문 걸림");
                 setInstruction = assistantService.setInstruction(modifyRequestDto.getInstruction(), modifyRequestDto.getPersonality().toString(), modifyRequestDto.getSpeechLevel().toString());
                 modifyRequestDto.setInstruction(setInstruction);
                 realService.modifyAssistantPersonality(modifyRequestDto.getPersonality(), assistantId);
@@ -227,29 +220,24 @@ public class RealController {
             }
             //personality만 수정된 경우
             else if(personality != null && speechLevel != null && !personality.equals(modifyRequestDto.getPersonality()) && speechLevel.equals(modifyRequestDto.getSpeechLevel())){
-                System.out.println("두 번째 조건문 걸림");
                 setInstruction = assistantService.setInstruction(modifyRequestDto.getInstruction(), modifyRequestDto.getPersonality().toString(), speechLevel.toString());
                 modifyRequestDto.setInstruction(setInstruction);
                 realService.modifyAssistantPersonality(modifyRequestDto.getPersonality(), assistantId);
             }
             //speechLevel만 수정된 경우
             else if(personality != null && speechLevel != null && personality.equals(modifyRequestDto.getPersonality()) && !speechLevel.equals(modifyRequestDto.getSpeechLevel())){
-                System.out.println("세 번째 조건문 걸림");
                 setInstruction = assistantService.setInstruction(modifyRequestDto.getInstruction(), personality.toString(), modifyRequestDto.getSpeechLevel().toString());
                 modifyRequestDto.setInstruction(setInstruction);
                 realService.modifyAssistantSpeechLevel(modifyRequestDto.getSpeechLevel(), assistantId);
             }
             //둘 다 수정 안된 경우
             else {
-                System.out.println("둘 다 수정 안됨");
                 setInstruction = assistantService.setInstruction(modifyRequestDto.getInstruction(), findOne.getPersonality().toString(), findOne.getSpeechLevel().toString());
-                System.out.println("setInstruction = " + setInstruction);
                 modifyRequestDto.setInstruction(setInstruction);
             }
         } else{ //insturction이 변경 안 된 경우
             //personality, speechLevel 둘 다 수정된 경우
             if(personality != null && speechLevel != null && !personality.equals(modifyRequestDto.getPersonality()) && !speechLevel.equals(modifyRequestDto.getSpeechLevel())){
-                System.out.println("첫 번째 조건문 걸림");
                 setInstruction = assistantService.setInstruction(findOne.getInstruction(), modifyRequestDto.getPersonality().toString(), modifyRequestDto.getSpeechLevel().toString());
                 modifyRequestDto.setInstruction(setInstruction);
                 realService.modifyAssistantPersonality(modifyRequestDto.getPersonality(), assistantId);
@@ -257,14 +245,12 @@ public class RealController {
             }
             //personality만 수정된 경우
             else if(personality != null && speechLevel != null && !personality.equals(modifyRequestDto.getPersonality()) && speechLevel.equals(modifyRequestDto.getSpeechLevel())){
-                System.out.println("두 번째 조건문 걸림");
                 setInstruction = assistantService.setInstruction(findOne.getInstruction(), modifyRequestDto.getPersonality().toString(), speechLevel.toString());
                 modifyRequestDto.setInstruction(setInstruction);
                 realService.modifyAssistantPersonality(modifyRequestDto.getPersonality(), assistantId);
             }
             //speechLevel만 수정된 경우
             else if(personality != null && speechLevel != null && personality.equals(modifyRequestDto.getPersonality()) && !speechLevel.equals(modifyRequestDto.getSpeechLevel())){
-                System.out.println("세 번째 조건문 걸림");
                 setInstruction = assistantService.setInstruction(findOne.getInstruction(), personality.toString(), modifyRequestDto.getSpeechLevel().toString());
                 modifyRequestDto.setInstruction(setInstruction);
                 realService.modifyAssistantSpeechLevel(modifyRequestDto.getSpeechLevel(), assistantId);
@@ -298,11 +284,16 @@ public class RealController {
             realService.modifyAssistantHasFile(assistantId);
             modifyRequestDto.setTools(Arrays.asList(
                     new Tool("code_interpreter")));
-        } else{ //새로 들어오는 파일 경로가 없으면 -> 삭제된 거 있나 확인
+        } else{ //새로 들어오는 파일이 없으면 -> 삭제된 거 있나 확인
 
             ResponseEntity<Object> response = assistantService.searchAssistant(assistantId);
             JSONObject object = new JSONObject(response.getBody());
+            System.out.println("response = " + response.getBody());
             List<String> fileIds =  (List<String>) object.get("file_ids");
+            System.out.println("====================================================");
+
+            System.out.println("object.toString() = " + object.toString());
+            System.out.println("====================================================");
 
             if(fileIds.size()>0){
                 for (String fileId : fileIds) {
@@ -310,16 +301,14 @@ public class RealController {
                 }
             }
         }
-
         //최종 어시스턴트 수정
         ResponseEntity<Object> res = assistantService.modifyAssistant(assistantId, modifyRequestDto);
         return ResponseEntity.ok(res);
     }
 
-
     //사용자가 튜터 이미지를 변경했을 때만 작돟하도록 프론트에서 설정
     @PutMapping("/assistants/{assistantId}/info/page/image")
-    public ResponseEntity<Object> modifyAssistantImage(@PathVariable("assistantId")String assistantId,@RequestParam("imgFile")MultipartFile file ) throws MalformedURLException {
+    public ResponseEntity<Object> modifyAssistantImage(@PathVariable("assistantId")String assistantId, @RequestParam("imgFile")MultipartFile file ) throws MalformedURLException {
 
         Assistant findOne = realService.findById(assistantId);
         String imgPath = findOne.getImg();
@@ -358,7 +347,6 @@ public class RealController {
         ResponseEntity<Object> res = assistantService.deleteAssistant(assistantId);
         return ResponseEntity.ok(res.getBody());
     }
-
     //검색
     @GetMapping("/search")
     public ResponseEntity<Object> search(@RequestParam("keyword")String keyword){
