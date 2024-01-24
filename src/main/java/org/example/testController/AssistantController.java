@@ -1,14 +1,22 @@
 package org.example.testController;
 
 import lombok.RequiredArgsConstructor;
+import org.example.Assistant.RealService;
+import org.example.Assistant.dto.TutorMessageDto;
 import org.example.model.dto.AssistantCreateRequestDto;
+import org.example.model.dto.ChatDto;
 import org.example.model.dto.CreateRunsRequestDto;
 import org.example.model.dto.audio.AudioRequestDto;
+import org.example.model.dto.getMessageDto;
 import org.example.model.dto.openai.*;
 import org.example.Assistant.dto.ModifyRequestDto;
 import org.example.service.AssistantService;
+import org.example.service.FileService;
+import org.example.service.S3Service;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.ArrayList;
 
 @RestController
 @RequiredArgsConstructor
@@ -16,6 +24,9 @@ import org.springframework.web.bind.annotation.*;
 public class AssistantController {
 
     private final AssistantService assistantService;
+    private final FileService fileService;
+    private final S3Service s3Service;
+    private final RealService realService;
 
     @PostMapping("/assistant")
     public ResponseEntity<Object> createAssistant(@RequestBody AssistantCreateRequestDto assistantCreateRequestDto) {
@@ -48,12 +59,12 @@ public class AssistantController {
     }
 
     @PostMapping("/messages/{threadId}")
-    public ResponseEntity<Object> createMessages(@PathVariable String threadId, @RequestBody MessagesRequestDto messagesRequestDto) {
+    public ResponseEntity<Object> createMessages(@PathVariable("threadId") String threadId, @RequestBody MessagesRequestDto messagesRequestDto) {
         return assistantService.createMessages(threadId, messagesRequestDto);
     }
 
     @GetMapping("/messages/list")
-    public ResponseEntity<Object> getMessagesList(@RequestParam String threadId) {
+    public ResponseEntity<Object> getMessagesList(@RequestParam("threadId") String threadId) {
         return assistantService.getMessagesList(threadId);
     }
 
@@ -63,26 +74,26 @@ public class AssistantController {
     }
 
     @GetMapping("/runs/{threadId}")
-    public ResponseEntity<Object> getRunList(@PathVariable String threadId){
+    public ResponseEntity<Object> getRunList(@PathVariable("threadId") String threadId){
         return assistantService.getRunList(threadId);
     }
     @GetMapping("/runs/{threadId}/run/{runId}")
-    public ResponseEntity<Object> getRun(@PathVariable("threadId")String threadId, @PathVariable("runId")String runId){
-        return assistantService.getRun(threadId, runId);
+    public ResponseEntity<Object> searchRun(@PathVariable("threadId")String threadId, @PathVariable("runId")String runId){
+        return assistantService.searchRun(threadId, runId);
     }
 
     // 나중에 프론트로 바이트 배열 자체를 넘길 때 사용. service 함수 수정할 것
-    @PostMapping(value = "/audio", produces = "audio/mpeg")
-    public ResponseEntity<byte[]> createSpeech(@RequestBody AudioRequestDto audioRequestDto){
-
-        return assistantService.createSpeech2(audioRequestDto);
-        /*
-        return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"speech.mp3\"")
-                .contentType(MediaType.parseMediaType("audio/mpeg"))
-                .body(assistantService.createSpeech2(audioRequestDto));
-         */
-    }
+//    @PostMapping(value = "/audio", produces = "audio/mpeg")
+//    public ResponseEntity<byte[]> createSpeech(@RequestBody AudioRequestDto audioRequestDto){
+//
+//        return assistantService.createSpeech2(audioRequestDto);
+//        /*
+//        return ResponseEntity.ok()
+//                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"speech.mp3\"")
+//                .contentType(MediaType.parseMediaType("audio/mpeg"))
+//                .body(assistantService.createSpeech2(audioRequestDto));
+//         */
+//    }
 
 
 }

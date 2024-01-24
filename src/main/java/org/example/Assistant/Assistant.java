@@ -1,18 +1,14 @@
 package org.example.Assistant;
 
 import jakarta.persistence.*;
-import jakarta.validation.Valid;
 import lombok.*;
-import org.example.Assistant.Enum.Personality;
-import org.example.Assistant.Enum.SpeechLevel;
-import org.example.Assistant.Enum.Voice;
-import org.example.model.dto.ChatDto;
-import org.springframework.http.ResponseEntity;
+import org.example.Assistant.Enum.*;
 
 @Entity
 @NoArgsConstructor
 @AllArgsConstructor
 @Getter @Setter
+@Builder
 public class Assistant {
     @Id @Column(name = "assistant_id")
     private String id;
@@ -20,8 +16,11 @@ public class Assistant {
     private String name;
     @Column(name="assistant_img")
     private String img;
-    //512자로 제한하는 거 걸기
+
     private String description;
+
+    //1000자로 제한
+    @Column(length = 1000)
     private String instruction;
 
     private boolean hasFile;
@@ -36,10 +35,34 @@ public class Assistant {
     @Enumerated(EnumType.STRING)
     private Voice voice;
 
+    @Enumerated(EnumType.STRING)
+    private AnswerDetail answerDetail;
+
+    @Enumerated(EnumType.STRING)
+    private ConversationalStyle conversationalStyle;
+
+    @Enumerated(EnumType.STRING)
+    private Emoji emoji;
+
+    @Enumerated(EnumType.STRING)
+    private EmotionalExpression emotionalExpression;
+
+    @Enumerated(EnumType.STRING)
+    private LanguageMode languageMode;
+
+    @Enumerated(EnumType.STRING)
+    private Roleplay roleplay;
+
+    @Enumerated(EnumType.STRING)
+    private UseOfTechnicalLanguage useOfTechnicalLanguage;
+
+    @Enumerated(EnumType.STRING)
+    private ResponseLength responseLength;
+
     public void setHasFileTure(){
         this.hasFile = true;
     }
-    public void setHasFileFalse(){
-        this.hasFile = false;
-    }
+    public void setHasFileFalse(){this.hasFile = false;}
+
+
 }

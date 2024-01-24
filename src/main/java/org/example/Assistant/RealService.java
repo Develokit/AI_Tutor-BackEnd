@@ -1,13 +1,16 @@
 package org.example.Assistant;
 
+import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
-import org.example.Assistant.Enum.Personality;
-import org.example.Assistant.Enum.SpeechLevel;
+import org.apache.commons.beanutils.BeanUtils;
+import org.apache.commons.beanutils.PropertyUtils;
 import org.example.Assistant.Enum.Voice;
 import org.example.Assistant.dto.*;
+import org.modelmapper.ModelMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.beans.PropertyDescriptor;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -17,6 +20,7 @@ import java.util.Optional;
 @Transactional
 public class RealService {
     private final AssistantRepository assistantRepository;
+    private final ModelMapper modelMapper;
 
     public void save(Assistant assistant) {
         assistantRepository.save(assistant);
@@ -33,81 +37,57 @@ public class RealService {
     }
     @Transactional(readOnly = true)
     public Assistant findById(String assistantId){
-        return assistantRepository.findById(assistantId).get();
+        Optional<Assistant> findOne = assistantRepository.findById(assistantId);
+        if(findOne.isPresent()) return findOne.get();
+        else throw new EntityNotFoundException("Assistant not found with id: " + assistantId);
     }
 
     @Transactional(readOnly = true)
     public TutoringPageDto findByIdInTutoringPage(String assistantId) {
-        Assistant findOne = assistantRepository.findById(assistantId).get();
+        Assistant findOne = findById(assistantId);
         return new TutoringPageDto(findOne.getName(), findOne.getDescription(), findOne.getImg());
     }
 
     @Transactional(readOnly = true)
     public TutorInfoDto getTutorInfo(String assistantId){
-        Assistant findOne = assistantRepository.findById(assistantId).get();
-        return new TutorInfoDto(findOne.getName(), findOne.getImg(), findOne.getDescription(), findOne.getPersonality(),findOne.getSpeechLevel(),findOne.getVoice());
+        Assistant findOne = findById(assistantId);
+        return new TutorInfoDto(findOne.getName(), findOne.getImg(), findOne.getDescription(), findOne.getPersonality(),findOne.getSpeechLevel(),findOne.getVoice(),
+                findOne.getAnswerDetail(), findOne.getConversationalStyle(), findOne.getEmoji(), findOne.getEmotionalExpression(), findOne.getLanguageMode(),
+                findOne.getRoleplay(), findOne.getUseOfTechnicalLanguage(), findOne.getResponseLength());
     }
 
     //튜터 수정 화면에 뿌려지는 정보
     @Transactional(readOnly = true)
     public TutorModifyDto getTutorInfoToModify(String assistantId){
-        Assistant findOne = assistantRepository.findById(assistantId).get();
-        return new TutorModifyDto(findOne.getName(), findOne.getImg(), findOne.getDescription(), findOne.getPersonality(),findOne.getSpeechLevel(),findOne.getVoice(), findOne.getInstruction());
+        Assistant findOne = findById(assistantId);
+        TutorModifyDto res = modelMapper.map(findOne, TutorModifyDto.class);
+        return res;
     }
     @Transactional(readOnly = true)
     public String getAssistantVoice(String assistantId){
-        Assistant findOne = assistantRepository.findById(assistantId).get();
+        Assistant findOne = findById(assistantId);
         Voice voice = findOne.getVoice();
         if(voice.toString().equals("Female")) return "shimmer";
         else return "onyx";
     }
 
-
-    public void modifyAssistantPersonality(Personality personality, String assistantId){
-        assistantRepository.updateAssistantPersonalityById(personality, assistantId);
-    }
-
-
-
     public void modifyAssistantImg(String assistantId, String img) {
         assistantRepository.updateAssistantImgById(assistantId, img);
     }
-
 
     public void deleteAssistant(String assistantId) {
         assistantRepository.deleteAssistantById(assistantId);
     }
 
 
-    public void setHasFileTrue(Assistant findOne) {
+    public void modifyAssistantHasFileTrue(String assistantId) {
+        Assistant findOne = findById(assistantId);
         findOne.setHasFileTure();
     }
 
-
-    public void modifyAssistantName(String name, String assistantId) {
-        assistantRepository.updateAssistantNameById(name, assistantId);
-    }
-
-
-    public void modifyAssistantDescription(String description, String assistantId) {
-        assistantRepository.updateAssistantDescriptionById(description, assistantId);
-    }
-
-
-    public void modifyAssistantInstruction(String instructions, String assistantId) {
-        assistantRepository.updateAssistantInstructionById(instructions, assistantId);
-    }
-
-    public void modifyAssistantSpeechLevel(SpeechLevel speechLevel, String assistantId) {
-        assistantRepository.updateAssistantSpeechLevelById(speechLevel, assistantId);
-    }
-
-    public void modifyAssistantHasFile(String assistantId) {
-        assistantRepository.updateAssistantHasFileById(assistantId);
-    }
-
-    public void modifyAssistantVoice(Voice voice, String assistantId) {
-        assistantRepository.updateAssistantVoiceById(voice, assistantId);
+    public void modifyAssistantHasFileFalse(String assistantId){
+        Assistant findOne = findById(assistantId);
+        findOne.setHasFileFalse();
     }
 
     public List<ShowHomeDto> searchByKeyword(String keyword){
@@ -118,5 +98,33 @@ public class RealService {
             showHomeDtoList.add(searchDto);
         }
         return showHomeDtoList;
+    }
+
+
+    public void updateAssistant(String assistantId, ModifyRequestDto modifyRequestDto) throws IllegalAccessException {
+
+        Assistant findOne = findById(assistantId);
+        try{
+            //원본 객체 프로퍼티 get
+            PropertyDescriptor[] propertyDescriptors = PropertyUtils.getPropertyDescriptors(modifyRequestDto);
+
+            for (PropertyDescriptor propertyDescriptor : propertyDescriptors) {
+                String name = propertyDescriptor.getName();
+                if(name.equals("class")){
+                    continue;
+                }
+                Object value = PropertyUtils.getProperty(modifyRequestDto, name);
+                if(value == null){
+                    BeanUtils.setProperty(findOne, name, null);
+                } else{
+                    BeanUtils.copyProperty(findOne, name, value);
+                }
+            }
+
+        }catch (Exception e){
+            throw new RuntimeException("Property copy with null handling failed",e);
+        }
+        //변경 사항 적용
+        assistantRepository.save(findOne);
     }
 }

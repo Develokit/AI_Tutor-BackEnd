@@ -1,11 +1,7 @@
 package org.example.Assistant;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
-import jakarta.annotation.Nullable;
+import feign.Response;
 import lombok.RequiredArgsConstructor;
-import org.example.Assistant.Enum.Personality;
-import org.example.Assistant.Enum.SpeechLevel;
-import org.example.Assistant.Enum.Voice;
 import org.example.Assistant.dto.*;
 import org.example.model.dto.*;
 import org.example.model.dto.audio.AudioRequestDto;
@@ -13,21 +9,15 @@ import org.example.model.dto.openai.*;
 import org.example.service.AssistantService;
 import org.example.service.FileService;
 import org.example.service.S3Service;
-import org.h2.util.json.JSONValidationTargetWithoutUniqueKeys;
 import org.json.JSONException;
-import org.json.JSONObject;
-import org.springframework.aop.scope.ScopedProxyUtils;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.MalformedURLException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
 
 @RestController
 @RequiredArgsConstructor
@@ -39,18 +29,96 @@ public class RealController {
     private final RealService realService;
     private final S3Service s3Service;
 
+    
     //홈 화면 - 어시스턴트 리스트
     @GetMapping("/")
     public ResponseEntity<Object> home(){
         return ResponseEntity.ok(realService.findAll());
     }
 
-    //어시스턴트 생성 : 등록한 파일이 있으면 먼저 서버에 저장 -> 파일 아이디 프론트에서 저장 -> (파일 있으면) 어시스턴트 code_interpreter로 생성하고 파일 넣기 -> 생성 완료
-    @PostMapping("/assistants")
-    public ResponseEntity<Object> createAssistant(@ModelAttribute AssistantCreateDto assistantCreateDto) throws IOException {
+    // gpt한테 instruction울 늘려달라고 요청할 때 사용
+    @PostMapping("/assistants/instruction")
+    public ResponseEntity<Object> createGptInstruction(@RequestBody GptInstructionDto gptInstructionDto){
+        String getGptInstruction = assistantService.getGptInstruction(gptInstructionDto.getInstruction()).join();
+        return ResponseEntity.ok(getGptInstruction);
+    }
+
+    //TODO: 테스트 하기
+    @PostMapping("/assistants/gpt4")
+    public ResponseEntity<Object> createAssistantWithModel4(@ModelAttribute AssistantCreateDto assistantCreateDto){
+        //enum 타입에 대해서만 필드가 null인지 아닌지 검사
+        Map<String, Enum<?>> nonNullFields = assistantService.getNonNullFieldsWhenCreate(assistantCreateDto);
+
+        AssistantCreateRequestDto AIassistantCreateDto = new AssistantCreateRequestDto();
+        boolean hasFile = false;
+
+        //등록된 파일 있으면 먼저 서버에 저장
+        if(assistantCreateDto.getFile1() != null){
+            hasFile = true;
+            AIassistantCreateDto.setTools(Arrays.asList(new Tool("retrieval"), new Tool ("code_interpreter")));
+            ResponseEntity<Object> response = fileService.uploadFile(assistantCreateDto.getFile1());
+            System.out.println("response.toString() = " + response.toString());
+            String fileId = fileService.getFileId(response);
+            AIassistantCreateDto.getFileIds().add(fileId);
+            if(assistantCreateDto.getFile2()!=null){
+                ResponseEntity<Object> response2 = fileService.uploadFile(assistantCreateDto.getFile2());
+                System.out.println("response2.toString() = " + response2.toString());
+                String fileId2 = fileService.getFileId(response2);
+                AIassistantCreateDto.getFileIds().add(fileId2);
+            }
+        }
 
         //튜터 성향 뽑아서 instruction에 넣기
-        String setInstruction = assistantService.setInstruction(assistantCreateDto.getInstruction(), assistantCreateDto.getPersonality().toString(), assistantCreateDto.getSpeechLevel().toString());
+        String setInstruction = assistantService.setInstructionWithModel4(hasFile, assistantCreateDto.getInstruction(), nonNullFields);
+
+        AIassistantCreateDto.setName(assistantCreateDto.getName());
+        AIassistantCreateDto.setInstruction(setInstruction);
+        AIassistantCreateDto.setDescription(assistantCreateDto.getDescription());
+
+
+        //어시스턴트 생성
+        ResponseEntity<Object> assistantObject = assistantService.createAssistantWithModel4(AIassistantCreateDto);
+        String assistantId = assistantService.getAssistantId(assistantObject);
+
+        //이미지 버킷에 저장하고 저장된 경로 반환
+        String imgUrl = s3Service.uploadImage(assistantCreateDto.getImgFile());
+
+        //db에 어시스턴트 insert
+        Assistant.AssistantBuilder builder =
+                Assistant.builder().id(assistantId).name(assistantCreateDto.getName()).img(imgUrl).description(assistantCreateDto.getDescription())
+                        .instruction(assistantCreateDto.getInstruction()).hasFile(hasFile);
+
+        //enum 클래스에 한해서 값이 있는 필드만 세팅
+        for (Map.Entry<String, Enum<?>> entry : nonNullFields.entrySet()) {
+
+            String fieldName = entry.getKey();
+            Enum<?> fieldValue = entry.getValue();
+            try {
+                // 필드 이름으로 setter 메서드 이름 구성
+                Method method = builder.getClass().getMethod(fieldName, fieldValue.getClass());
+                // 메서드 호출해서 값 설정
+                method.invoke(builder, fieldValue);
+            } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException e) {
+                e.printStackTrace();
+            }
+        }
+        realService.save(builder.build());
+
+        return ResponseEntity.ok(assistantObject);
+    }
+
+    //어시스턴트 생성 : 등록한 파일이 있으면 먼저 서버에 저장 -> 파일 아이디 프론트에서 저장 -> (파일 있으면) 어시스턴트 code_interpreter로 생성하고 파일 넣기 -> 생성 완료
+    @PostMapping("/assistants")
+    public ResponseEntity<Object> createAssistant(@ModelAttribute AssistantCreateDto assistantCreateDto) {
+
+        System.out.println("assistantCreateDto.toString() = " + assistantCreateDto.toString());
+
+        //enum 타입에 대해서만 필드가 null인지 아닌지 검사
+        Map<String, Enum<?>> nonNullFields = assistantService.getNonNullFieldsWhenCreate(assistantCreateDto);
+
+        //튜터 성향 뽑아서 instruction에 넣기
+        String setInstruction = assistantService.setInstruction(assistantCreateDto.getInstruction(), nonNullFields);
+
         boolean hasFile = false;
 
         AssistantCreateRequestDto AIassistantCreateDto = new AssistantCreateRequestDto();
@@ -62,16 +130,17 @@ public class RealController {
         if(assistantCreateDto.getFile1() != null){
             hasFile = true;
             ResponseEntity<Object> response = fileService.uploadFile(assistantCreateDto.getFile1());
+            System.out.println("response.toString() = " + response.toString());
             String fileId = fileService.getFileId(response);
-            AIassistantCreateDto.setTools(Arrays.asList(
-                    new Tool("code_interpreter")));
             AIassistantCreateDto.getFileIds().add(fileId);
             if(assistantCreateDto.getFile2()!=null){
                 ResponseEntity<Object> response2 = fileService.uploadFile(assistantCreateDto.getFile2());
+                System.out.println("response2.toString() = " + response2.toString());
                 String fileId2 = fileService.getFileId(response2);
                 AIassistantCreateDto.getFileIds().add(fileId2);
             }
         }
+
         //어시스턴트 생성
         ResponseEntity<Object> assistantObject = assistantService.createAssistant(AIassistantCreateDto);
         String assistantId = assistantService.getAssistantId(assistantObject);
@@ -80,13 +149,28 @@ public class RealController {
         String imgUrl = s3Service.uploadImage(assistantCreateDto.getImgFile());
 
         //db에 어시스턴트 insert
-        Assistant assistant = new Assistant(assistantId, assistantCreateDto.getName(), imgUrl, assistantCreateDto.getDescription(), assistantCreateDto.getInstruction(), hasFile,
-                assistantCreateDto.getPersonality(), assistantCreateDto.getSpeechLevel(), assistantCreateDto.getVoice());
-        realService.save(assistant);
+        Assistant.AssistantBuilder builder =
+                Assistant.builder().id(assistantId).name(assistantCreateDto.getName()).img(imgUrl).description(assistantCreateDto.getDescription())
+                .instruction(assistantCreateDto.getInstruction()).hasFile(hasFile);
+
+        //enum 클래스에 한해서 값이 있는 필드만 세팅
+        for (Map.Entry<String, Enum<?>> entry : nonNullFields.entrySet()) {
+
+            String fieldName = entry.getKey();
+            Enum<?> fieldValue = entry.getValue();
+            try {
+                // 필드 이름으로 setter 메서드 이름 구성
+                Method method = builder.getClass().getMethod(fieldName, fieldValue.getClass());
+                // 메서드 호출해서 값 설정
+                method.invoke(builder, fieldValue);
+            } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException e) {
+                e.printStackTrace();
+            }
+        }
+        realService.save(builder.build());
 
         return ResponseEntity.ok(assistantObject);
     }
-
     //튜터링 화면 - 상세 정보
     @GetMapping("/assistants/{assistantId}/info")
     public ResponseEntity<Object> tutoringInfo(@PathVariable("assistantId")String assistantId){
@@ -108,56 +192,34 @@ public class RealController {
     //메시지 보내고 답변 받기 - 파일(사진 등)으로도 질문하는 경우로 수정
     @PostMapping("/assistants/{threadId}/chat")
     public ResponseEntity<Object> getMessage(@PathVariable("threadId") String threadId, @ModelAttribute getMessageDto getMessageDto
-    ) throws IOException {
-
-        String fileId = "";
+    ) throws IllegalAccessException{
         //입력한 파일이 있으면
         if(getMessageDto.getFile() != null){
             ResponseEntity<Object> response = fileService.uploadFile(getMessageDto.getFile());
-            fileId = fileService.getFileId(response);
+            String fileId = fileService.getFileId(response);
+            ArrayList<String> fileIds = new ArrayList<>();
+            fileIds.add(fileId);
+            //메시지 생성
+            assistantService.createMessages(threadId, new MessagesRequestDto("user", getMessageDto.getContent(), fileIds));
         }
-        ArrayList<String> fileIds = new ArrayList<>();
-        fileIds.add(fileId);
-
-        //메시지 생성
-        assistantService.createMessages(threadId, new MessagesRequestDto(getMessageDto.getContent(), fileIds));
+        else{
+            //메시지 생성
+            assistantService.createMessages(threadId, new MessagesRequestDto("user", getMessageDto.getContent()));
+        }
         //런 생성
         ResponseEntity<Object> runs = assistantService.createRuns(threadId, new CreateRunsRequestDto(getMessageDto.getAssistantId()));
+        //System.out.println("runs.toString() = " + runs.toString());
         //런 아이디 꺼내기
         String runId = assistantService.getRunId(runs);
-        //런 실행 상태 추적
-        ResponseEntity<Object> run = assistantService.getRun(threadId, runId);
-        JSONObject object = new JSONObject(Objects.requireNonNull(run.getBody()));
-        String status = object.get("status").toString();
-        ChatDto chatDto = new ChatDto();
-        int cnt = 0;
+        //런 실행 상태 추적 후 답변 얻기
+        ChatDto chatDto= assistantService.getRunStatusToGetMessage(threadId, runId).join();
 
-        while(status.equals("in_progress")) {
-            System.out.println("cnt = " + cnt);
-            ResponseEntity<Object> runForCheck = assistantService.getRun(threadId, runId);
-            JSONObject objectForCheck = new JSONObject(Objects.requireNonNull(runForCheck.getBody()));
-
-            if (objectForCheck.get("status").toString().equals("completed")) {
-                //메시지 리스트 조회
-                ResponseEntity<Object> messagesList = assistantService.getMessagesList(threadId);
-                //답변 내보내기
-                chatDto.setAnswer(assistantService.makeChat(messagesList).getAnswer());
-                break;
-            }
-            try{
-                Thread.sleep(1000);
-            }catch(InterruptedException e){
-                Thread.currentThread().interrupt();
-                return new ResponseEntity<>(e.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
-            }
-            cnt++;
-        }
         //음성으로 질문한 거라면
         if(getMessageDto.getIsVoice().equals("true")){
-            //byte[] speech = assistantService.createSpeech2(new AudioRequestDto(chatDto.getAnswer()));
             System.out.println("음성 인터페이스 전환");
             String voice = realService.getAssistantVoice(getMessageDto.getAssistantId());
-            ResponseEntity<Object> speech = assistantService.createSpeech(new AudioRequestDto(chatDto.getAnswer()), voice);
+            //ResponseEntity<Object> speech = assistantService.createSpeech(new AudioRequestDto(chatDto.getAnswer()), voice);
+            String speech = assistantService.createSpeech2(new AudioRequestDto(chatDto.getAnswer()), voice);
             TutorMessageDto res = new TutorMessageDto(chatDto, speech);
             return ResponseEntity.ok(res);
         }
@@ -176,9 +238,12 @@ public class RealController {
 
         List <String> fileNames = new ArrayList<>();
         Assistant findOne = realService.findById(assistantId);
+        List<String> fileIds = new ArrayList<>();
+
         if(findOne.isHasFile()){
             ResponseEntity<Object> assistant = assistantService.searchAssistant(assistantId);
             List<String> fileIdList = assistantService.getFileIdList(assistant);
+            fileIds = fileIdList;
             for (String fileId : fileIdList) {
                 String fileName = fileService.getFileName(fileId);
                 fileNames.add(fileName);
@@ -186,9 +251,10 @@ public class RealController {
         }
         TutorModifyDto res = realService.getTutorInfoToModify(assistantId);
         res.setFileNames(fileNames);
+        res.setFileIds(fileIds);
+        res.setModel(assistantService.getModel(assistantService.searchAssistant(assistantId)));
         return ResponseEntity.ok(res);
     }
-
 
     //파일 없다가 추가하는 경우도 생각해야 함
     // 어시스턴트 수정하기 버튼 클릭 + 어시스턴트에 넣은 파일 삭제하기. 기존 정보에서 달라진 게 없으면 알아서 프론트에서 이거 못 날리게 막도록 가능?
@@ -196,117 +262,82 @@ public class RealController {
     //어시스턴트 수정
     //1) openAI 수정
     //2) DB 수정
-
+    //변경 된 거 없어도 그대로 값 들고 옴. 필드 삭제되었을 때만 프론트에서 아예 해당 객체 보내지 않음(null)
     @PutMapping("/assistants/{assistantId}/info/page")
-    public ResponseEntity<Object> modifyAssistant(@PathVariable("assistantId")String assistantId, @ModelAttribute ModifyRequestDto modifyRequestDto) throws JSONException {
+    public ResponseEntity<Object> modifyAssistant(@PathVariable("assistantId")String assistantId, @ModelAttribute ModifyRequestDto modifyRequestDto) throws JSONException, IllegalAccessException {
 
-        Assistant findOne = realService.findById(assistantId);
-        String setInstruction = "";
+        realService.updateAssistant(assistantId, modifyRequestDto);
 
-        //튜터 성향에 관한 수정 사항 검증
-        Personality personality = findOne.getPersonality();
-        SpeechLevel speechLevel = findOne.getSpeechLevel();
+        Map<String, Enum<?>> nonNullFields = assistantService.getNonNullFieldsWhenModify(modifyRequestDto);
 
-        //instruction 변경 검증
-        if(!modifyRequestDto.getInstruction().equals(findOne.getInstruction())){
-            realService.modifyAssistantInstruction(modifyRequestDto.getInstruction(), assistantId);
 
-            //personality, speechLevel 둘 다 수정된 경우
-            if(personality != null && speechLevel != null && !personality.equals(modifyRequestDto.getPersonality()) && !speechLevel.equals(modifyRequestDto.getSpeechLevel())){
-                setInstruction = assistantService.setInstruction(modifyRequestDto.getInstruction(), modifyRequestDto.getPersonality().toString(), modifyRequestDto.getSpeechLevel().toString());
-                modifyRequestDto.setInstruction(setInstruction);
-                realService.modifyAssistantPersonality(modifyRequestDto.getPersonality(), assistantId);
-                realService.modifyAssistantSpeechLevel(modifyRequestDto.getSpeechLevel(), assistantId);
-            }
-            //personality만 수정된 경우
-            else if(personality != null && speechLevel != null && !personality.equals(modifyRequestDto.getPersonality()) && speechLevel.equals(modifyRequestDto.getSpeechLevel())){
-                setInstruction = assistantService.setInstruction(modifyRequestDto.getInstruction(), modifyRequestDto.getPersonality().toString(), speechLevel.toString());
-                modifyRequestDto.setInstruction(setInstruction);
-                realService.modifyAssistantPersonality(modifyRequestDto.getPersonality(), assistantId);
-            }
-            //speechLevel만 수정된 경우
-            else if(personality != null && speechLevel != null && personality.equals(modifyRequestDto.getPersonality()) && !speechLevel.equals(modifyRequestDto.getSpeechLevel())){
-                setInstruction = assistantService.setInstruction(modifyRequestDto.getInstruction(), personality.toString(), modifyRequestDto.getSpeechLevel().toString());
-                modifyRequestDto.setInstruction(setInstruction);
-                realService.modifyAssistantSpeechLevel(modifyRequestDto.getSpeechLevel(), assistantId);
-            }
-            //둘 다 수정 안된 경우
-            else {
-                setInstruction = assistantService.setInstruction(modifyRequestDto.getInstruction(), findOne.getPersonality().toString(), findOne.getSpeechLevel().toString());
-                modifyRequestDto.setInstruction(setInstruction);
-            }
-        } else{ //insturction이 변경 안 된 경우
-            //personality, speechLevel 둘 다 수정된 경우
-            if(personality != null && speechLevel != null && !personality.equals(modifyRequestDto.getPersonality()) && !speechLevel.equals(modifyRequestDto.getSpeechLevel())){
-                setInstruction = assistantService.setInstruction(findOne.getInstruction(), modifyRequestDto.getPersonality().toString(), modifyRequestDto.getSpeechLevel().toString());
-                modifyRequestDto.setInstruction(setInstruction);
-                realService.modifyAssistantPersonality(modifyRequestDto.getPersonality(), assistantId);
-                realService.modifyAssistantSpeechLevel(modifyRequestDto.getSpeechLevel(), assistantId);
-            }
-            //personality만 수정된 경우
-            else if(personality != null && speechLevel != null && !personality.equals(modifyRequestDto.getPersonality()) && speechLevel.equals(modifyRequestDto.getSpeechLevel())){
-                setInstruction = assistantService.setInstruction(findOne.getInstruction(), modifyRequestDto.getPersonality().toString(), speechLevel.toString());
-                modifyRequestDto.setInstruction(setInstruction);
-                realService.modifyAssistantPersonality(modifyRequestDto.getPersonality(), assistantId);
-            }
-            //speechLevel만 수정된 경우
-            else if(personality != null && speechLevel != null && personality.equals(modifyRequestDto.getPersonality()) && !speechLevel.equals(modifyRequestDto.getSpeechLevel())){
-                setInstruction = assistantService.setInstruction(findOne.getInstruction(), personality.toString(), modifyRequestDto.getSpeechLevel().toString());
-                modifyRequestDto.setInstruction(setInstruction);
-                realService.modifyAssistantSpeechLevel(modifyRequestDto.getSpeechLevel(), assistantId);
-            }
-        }
-
-        //이름 변경 검증
-        if(!modifyRequestDto.getName().equals(findOne.getName())){
-            realService.modifyAssistantName(modifyRequestDto.getName(), assistantId);
-        }
-        //description 변경 검증
-        if(!modifyRequestDto.getDescription().equals(findOne.getDescription())){
-            realService.modifyAssistantDescription(modifyRequestDto.getDescription(), assistantId);
-        }
-        //voice 변경 검증
-        if(!modifyRequestDto.getVoice().equals(findOne.getVoice())){
-            realService.modifyAssistantVoice(modifyRequestDto.getVoice(), assistantId);
-        }
         //파일 변경 검증
         if(modifyRequestDto.getFile1() != null){ //새로 들어오는 파일 경로가 있으면
             ResponseEntity<Object> response = fileService.uploadFile(modifyRequestDto.getFile1());
+            System.out.println("it has file1");
             String fileId = fileService.getFileId(response);
-                //수정하면서 업로드된 파일 아이디 dto에 넣기
-                modifyRequestDto.getFileIds().add(fileId);
+            //수정하면서 업로드된 파일 아이디 dto에 넣기
+            modifyRequestDto.getFileIds().add(fileId);
                 if(modifyRequestDto.getFile2() != null){
+                    System.out.println("it has file2");
                     ResponseEntity<Object> response2 = fileService.uploadFile(modifyRequestDto.getFile2());
                     String fileId2 = fileService.getFileId(response2);
                     modifyRequestDto.getFileIds().add(fileId2);
             }
             //hasFile = true 설정
-            realService.modifyAssistantHasFile(assistantId);
-            modifyRequestDto.setTools(Arrays.asList(
-                    new Tool("code_interpreter")));
+            realService.modifyAssistantHasFileTrue(assistantId);
+            if(modifyRequestDto.getModel().equals("gpt-4-1106-preview"))
+                modifyRequestDto.setTools(Arrays.asList(new Tool("retrieval"), new Tool("code_interpreter")));
+            else
+                modifyRequestDto.setTools(List.of(new Tool("code_interpreter")));
         } else{ //새로 들어오는 파일이 없으면 -> 삭제된 거 있나 확인
 
-            ResponseEntity<Object> response = assistantService.searchAssistant(assistantId);
-            JSONObject object = new JSONObject(response.getBody());
-            System.out.println("response = " + response.getBody());
-            List<String> fileIds =  (List<String>) object.get("file_ids");
-            System.out.println("====================================================");
+            List<String> modifiedFileIds = modifyRequestDto.getFileIds();
+            List<String> fileIds = assistantService.getFileIdList(assistantService.searchAssistant(assistantId));
+            int fileIdsSize = fileIds.size();
 
-            System.out.println("object.toString() = " + object.toString());
-            System.out.println("====================================================");
+            //삭제 되어야 하는 파일 아이디를 담는 배열
+            List<String> toBeDeleted = new ArrayList<>();
 
-            if(fileIds.size()>0){
-                for (String fileId : fileIds) {
-                    fileService.deleteFile(fileId);
+            for (String fileId : fileIds) {
+                if (!modifiedFileIds.contains(fileId)) {
+                    toBeDeleted.add(fileId);
                 }
             }
+            for (String fileId : toBeDeleted) {
+                fileService.deleteFile(fileId);
+                fileIdsSize -= 1;
+            }
+            //붙은 file이 없으면 hasFile = false 설정
+            if(fileIdsSize == 0){
+                realService.modifyAssistantHasFileFalse(assistantId);
+            }
+            else{
+                if(modifyRequestDto.getModel().equals("gpt-4-1106-preview"))
+                    modifyRequestDto.setTools(Arrays.asList(new Tool("retrieval"), new Tool("code_interpreter")));
+                else
+                    modifyRequestDto.setTools(List.of(new Tool("code_interpreter")));
+            }
         }
-        //최종 어시스턴트 수정
-        ResponseEntity<Object> res = assistantService.modifyAssistant(assistantId, modifyRequestDto);
+
+        String setInstruction="";
+
+        ResponseEntity<Object> res;
+        if(modifyRequestDto.getModel().equals("gpt-4-1106-preview")){
+            setInstruction = assistantService.setInstructionWithModel4(realService.findById(assistantId).isHasFile(), modifyRequestDto.getInstruction(), nonNullFields);
+            modifyRequestDto.setInstruction(setInstruction);
+            res = assistantService.modifyAssistantWithModel4(assistantId, modifyRequestDto);
+
+        }
+        else{
+            setInstruction = assistantService.setInstruction(modifyRequestDto.getInstruction(), nonNullFields);
+            modifyRequestDto.setInstruction(setInstruction);
+            res = assistantService.modifyAssistant(assistantId, modifyRequestDto);
+        }
         return ResponseEntity.ok(res);
     }
 
-    //사용자가 튜터 이미지를 변경했을 때만 작돟하도록 프론트에서 설정
+    //사용자가 튜터 이미지를 변경했을 때만 작동
     @PutMapping("/assistants/{assistantId}/info/page/image")
     public ResponseEntity<Object> modifyAssistantImage(@PathVariable("assistantId")String assistantId, @RequestParam("imgFile")MultipartFile file ) throws MalformedURLException {
 
@@ -321,7 +352,6 @@ public class RealController {
 
         return ResponseEntity.ok("success");
     }
-
 
     //어시스턴트 삭제하기
     @DeleteMapping("/assistants/{assistantId}")
@@ -353,6 +383,5 @@ public class RealController {
         List<ShowHomeDto> showHomeDtoList = realService.searchByKeyword(keyword);
         return ResponseEntity.ok(showHomeDtoList);
     }
-
 
 }
